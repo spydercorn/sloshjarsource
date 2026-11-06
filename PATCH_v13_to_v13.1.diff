@@ -1,0 +1,92 @@
+--- v13/source/Plugin.cpp
++++ v13.1/source/Plugin.cpp
+@@ -279,6 +279,10 @@
+     std::unordered_map<const RE::BSGeometry*, JarSloshState> g_jarSloshStates;
+     std::chrono::steady_clock::time_point g_lastSloshCleanup{};
+ 
++    // D3D11 exposes PS constant-buffer slots 0..13 (14 total). Never use b14.
++    constexpr UINT kSloshConstantSlot = 12;
++    static_assert(kSloshConstantSlot < D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT);
++
+     struct alignas(16) JarSloshConstantData {
+         float slopeX;
+         float slopeY;
+@@ -647,7 +651,7 @@
+ 
+         Microsoft::WRL::ComPtr<ID3D11PixelShader> originalPS;
+         Microsoft::WRL::ComPtr<ID3D11Buffer> priorB13;
+-        Microsoft::WRL::ComPtr<ID3D11Buffer> priorB14;
++        Microsoft::WRL::ComPtr<ID3D11Buffer> priorSloshBuffer;
+         Microsoft::WRL::ComPtr<ID3D11Buffer> perGeometry;
+         Microsoft::WRL::ComPtr<ID3D11BlendState> originalBlend;
+         Microsoft::WRL::ComPtr<ID3D11DepthStencilState> originalDepth;
+@@ -656,7 +660,7 @@
+         UINT originalStencilRef = 0;
+         ctx->PSGetShader(originalPS.GetAddressOf(), nullptr, nullptr);
+         ctx->PSGetConstantBuffers(13, 1, priorB13.GetAddressOf());
+-        ctx->PSGetConstantBuffers(14, 1, priorB14.GetAddressOf());
++        ctx->PSGetConstantBuffers(kSloshConstantSlot, 1, priorSloshBuffer.GetAddressOf());
+         ctx->VSGetConstantBuffers(2, 1, perGeometry.GetAddressOf());
+         ctx->OMGetBlendState(originalBlend.GetAddressOf(), originalBlendFactor, &originalSampleMask);
+         ctx->OMGetDepthStencilState(originalDepth.GetAddressOf(), &originalStencilRef);
+@@ -711,7 +715,7 @@
+         }
+ 
+         // Create and update one tiny dynamic buffer. Each tagged Jar03 receives
+-        // independent, persistent slopes; all other passes keep their PS b14.
++        // independent, persistent slopes; all other passes keep their PS b12.
+         if (!g_sloshPerJarBuffer) {
+             D3D11_BUFFER_DESC desc{};
+             desc.ByteWidth = sizeof(JarSloshConstantData);
+@@ -734,7 +738,7 @@
+         ID3D11Buffer* worldBuffer = perGeometry.Get();
+         ctx->PSSetConstantBuffers(13, 1, &worldBuffer);
+         ID3D11Buffer* movementBuffer = g_sloshPerJarBuffer.Get();
+-        ctx->PSSetConstantBuffers(14, 1, &movementBuffer);
++        ctx->PSSetConstantBuffers(kSloshConstantSlot, 1, &movementBuffer);
+         ctx->PSSetShader(g_gravityPlanePS.Get(), nullptr, 0);
+         ctx->OMSetBlendState(g_overlayBlend.Get(), originalBlendFactor, originalSampleMask);
+         ctx->OMSetDepthStencilState(g_overlayDepth.Get(), originalStencilRef);
+@@ -747,11 +751,11 @@
+         ctx->PSSetShader(originalPS.Get(), nullptr, 0);
+         ID3D11Buffer* oldB13 = priorB13.Get();
+         ctx->PSSetConstantBuffers(13, 1, &oldB13);
+-        ID3D11Buffer* oldB14 = priorB14.Get();
+-        ctx->PSSetConstantBuffers(14, 1, &oldB14);
++        ID3D11Buffer* oldSloshBuffer = priorSloshBuffer.Get();
++        ctx->PSSetConstantBuffers(kSloshConstantSlot, 1, &oldSloshBuffer);
+         const auto n = g_overlayAttempts.fetch_add(1, std::memory_order_relaxed) + 1;
+         if (n <= g_maxTraceLines) {
+-            spdlog::info("LIQUID OVERLAY: DRAW #{} Jar03 528 indices / 3 RTVs; original PS, blend, depth, b13 and b14 restored", n);
++            spdlog::info("LIQUID OVERLAY: DRAW #{} Jar03 528 indices / 3 RTVs; original PS, blend, depth, b13 and b12 restored", n);
+         }
+     }
+ 
+
+--- v13/SKSE/Plugins/FilledJar/FilledJarLiquid.hlsl
++++ v13.1/SKSE/Plugins/FilledJar/FilledJarLiquid.hlsl
+@@ -2,7 +2,7 @@
+ // THIS FILE is not in Data/Shaders and does not override Lighting.hlsl.
+ // The SKSE plugin renders the normal glass first, then issues an extra draw
+ // using PSGravityPlane with RTV0 RGB blending and read-only depth.
+-// v13 gets movement-triggered damped-spring tilt from SKSE PS b14; volume conserved.
++// v13 gets movement-triggered damped-spring tilt from SKSE PS b12; volume conserved.
+ // The second-pass prototype has been verified in-game by the mod author.
+ // v12: slow-motion rocked surface; preserve v11 volume conservation.
+ // No changes to face selection, opacity, geometry profile or renderer.
+@@ -161,12 +161,12 @@
+ 
+ // ---------- v13 MOVEMENT-BASED SLOSH ----------
+ // Per-jar, damped, movement-triggered surface tilt comes from our plugin.
+-// PS b14 contains (slopeX, slopeY, 0, 0), written ONLY during the tagged
+-// Jar03 overlay draw, with the previous b14 restored immediately after.
++// PS b12 contains (slopeX, slopeY, 0, 0), written ONLY during the tagged
++// Jar03 overlay draw, with the previous b12 restored immediately after.
+ // These slopes are WORLD XY components; Z remains 1.0, so the surface is
+ // level when motion settles. The same tilted plane drives volume + top + walls.
+ #define FJ_SLOSH_ENABLED             1  // 0 = static volume-conserving v11 surface
+-cbuffer FilledJarMovementSlosh : register(b14)
++cbuffer FilledJarMovementSlosh : register(b12)
+ {
+     float4 FJSloshTiltXY : packoffset(c0);
+ };
