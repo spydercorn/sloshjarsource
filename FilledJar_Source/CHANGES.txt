@@ -1,2 +1,0 @@
-v13.1: Fix HLSL/D3D11 invalid constant-buffer register b14 -> PS b12; preserve/restore b12 in C++ second-pass overlay. Added shader-only static-liquid rescue for existing v13 DLLs.
-Previously: v13 introduced per-jar movement-triggered damped spring, PS b14 (invalid), original glass kept.
